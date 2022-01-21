@@ -73,4 +73,3 @@ for i in range(5):
 print(CNN)
 print(LSTM)
 print('aaa ?')
-print('aaa ?')
