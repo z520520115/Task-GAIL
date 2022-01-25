@@ -2,7 +2,7 @@ import cv2
 
 cap = cv2.VideoCapture("./data/task_sample_videos/jump_forward.mp4")
 c = 1
-frameRate = 15  # 帧数截取间隔（每隔10帧截取一帧）
+frameRate = 1  # 帧数截取间隔（每隔1帧截取一帧）
 
 while (True):
     ret, frame = cap.read()
@@ -16,4 +16,5 @@ while (True):
     else:
         print("所有帧都已经保存完成")
         break
+
 cap.release()
