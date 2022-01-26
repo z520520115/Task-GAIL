@@ -2,14 +2,18 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 from sklearn.metrics import accuracy_score
+import pickle
+from torch.utils import data
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.models as models
+import torchvision.transforms as transforms
 import os
 import numpy
 
 # data path
-data_path = "./data/task_sample_videos"
+data_path = "./data/task04/"
 save_model_path = "./crnn_model/"
 
 # select which frame to begin & end in videos
@@ -69,20 +73,6 @@ class LSTM(nn.Module):
 
     def initHidden(self):
         return torch.zeros(1, self.hidden_size)
-
-cnn = CNN()
-lstm = LSTM()
-
-h = torch.randn(1, 1024)
-
-for epoch in range(5):
-    pred = cnn(data[i])
-    pred, h = lstm(pred, h)
-    pred = torch.argmax(pred, dim=1)
-    pred = pred.detach().numpy()
-    h.detach()
-    # pred = torch.stack(pred, dim=0)
-    print()
 
 def train(log_intreval, model, device, train_loader, optimizer, epoch):
     # Set model as training mode
@@ -149,7 +139,7 @@ def validation(model, device, optimizer, test_loader):
     test_loss /= len(test_loader.dataset)
 
     # compute accuracy
-    all_y = torch.stack(all_y, dim=0)
+    all_y = torch.stack(all_y, dim=0)# 拼接张量, 将all_y变成0维的新张量
     all_y_pred = torch.stack(all_y_pred, dim = 0)
     test_score = accuracy_score(all_y.cpu().data.squeeze().numpy(), all_y_pred.cpu().data.squeeze().numpy())
 
@@ -170,3 +160,53 @@ device = torch.device("cuda" if use_cuda else "cpu") # use CPU or GPU
 
 # Data loading parameters
 params = {'batch_size': 5, 'shuffle': True, 'num_workers': 4, 'pin_memory': True} if use_cuda else {}
+
+# load Task actions names
+task_labels = ['JumpForward', 'Run', 'TurnLeft', 'TurnRight']
+
+# convert labels -> category
+le = LabelEncoder()
+le.fit(task_labels)
+
+# show how many classes there are
+list(le.classes_)
+
+# convert category -> one-hot
+action_category = le.transform(task_labels).reshape(-1, 1)
+enc = OneHotEncoder()
+enc.fit(action_category)
+
+tasks = []
+fnames = os.listdir(data_path)
+
+all_tasks_names = []
+for f in fnames:
+    loc1 = f.find('v_')
+    loc2 = f.find('_g')
+    tasks.append(f[(loc1 + 2) : loc2])
+
+    all_tasks_names.append(f)
+
+# all data files
+x_list = all_tasks_names              # all video file names
+y_list = le.transform(task_labels)    # all video labels
+
+# random split sample set to training set and test set
+x_train, y_train, x_test, y_test = train_test_split(x_list, y_list, test_size=0.25, random_state=42)
+
+transform = transforms.Compose([transforms.Resize(i)])
+
+
+cnn = CNN()
+lstm = LSTM()
+
+h = torch.randn(1, 1024)
+
+for epoch in range(5):
+    pred = cnn(data[i])
+    pred, h = lstm(pred, h)
+    pred = torch.argmax(pred, dim=1)
+    pred = pred.detach().numpy()
+    h.detach()
+    # pred = torch.stack(pred, dim=0)
+    print()
