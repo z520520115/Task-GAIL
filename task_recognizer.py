@@ -3,6 +3,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder
 from sklearn.metrics import accuracy_score
 import pickle
+from PIL import Image
 from torch.utils import data
 import torch
 import torch.nn as nn
@@ -10,69 +11,199 @@ import torch.nn.functional as F
 import torchvision.models as models
 import torchvision.transforms as transforms
 import os
-import numpy
+import numpy as np
 
 # data path
 data_path = "./data/task04/"
 save_model_path = "./crnn_model/"
 
+# cnn architecture
+CNN_fc_hidden1, CNN_fc_hidden2 = 1024, 768
+cnn_embed_dim = 512
+img_x, img_y = 256, 342
+dropout_p = 0.0
+
+# lstm architecture
+RNN_hidden_layers = 3
+RNN_hidden_nodes = 512
+RNN_FC_dim = 256
+
+# training parameters
+k = 4                   # number of target category
+epochs = 120
+batch_size = 1
+learning_rate = 1e-4
+log_interval = 10       # interval for displaying training info
+
 # select which frame to begin & end in videos
-b_frame, e_frame, s_frame = 1, 50, 5
+b_frame, e_frame, s_frame = 1, 29, 1
 
 # fake data for test
 # data = torch.ones(5, 1, 3, 500, 500) # [batchsize, seqsize, channle, 500, 500]
 
+def conv2D_output_size(img_size, padding, kernel_size, stride):
+    # compute output shape of conv2D
+    outshape = (np.floor((img_size[0] + 2 * padding[0] - (kernel_size[0] - 1) - 1) / stride[0] + 1).astype(int),
+                np.floor((img_size[1] + 2 * padding[1] - (kernel_size[1] - 1) - 1) / stride[1] + 1).astype(int))
+    return outshape
+
 class CNN(nn.Module):
-    def __init__(self, kernel_size = (3,3),):
+    def __init__(self, img_x=90, img_y=120, fc_hidden1=512, fc_hidden2=512, drop_p=0.3, CNN_embed_dim=300):
         super(CNN, self).__init__()
-        # data shape = (1, 3, 500, 500)
-        self.encoder = torch.nn.Sequential(
-            # Conv1  = (1, 32, 498, 498) (500-3+0)/1+1 = 498
-            # Pool1  = (1, 32, 166, 166)
-            torch.nn.Conv2d(3, 32, kernel_size = (3,3), stride = (1,1), padding='valid'),
-            torch.nn.AvgPool2d(kernel_size =(3,3), stride=(3,3)),
-            # Conv2  = (1, 64, 164, 164)
-            # Pool2  = (1, 64, 54, 54)
-            torch.nn.Conv2d(32, 64, kernel_size=(3, 3), stride=(1, 1), padding='valid'),
-            torch.nn.AvgPool2d(kernel_size=(3, 3)),
-            # Conv3  = (1, 128, 52, 52)
-            # Pool3  = (1, 128, 17, 17)
-            torch.nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding='valid'),
-            torch.nn.AvgPool2d(kernel_size=(3, 3)),
-            # Conv4  = (1, 256, 15, 15)
-            # Pool4  = (1, 256, 5, 5)
-            torch.nn.Conv2d(128, 256, kernel_size=(3, 3), stride=(1, 1), padding='valid'),
-            torch.nn.AvgPool2d(kernel_size=(3, 3)),
-            # Conv4  = (1, 512, 5, 5)
-            # Pool4  = (1, 512, 1, 1)
-            # Flat  = (1, 512)
-            torch.nn.Conv2d(256, 512, kernel_size=(3, 3), stride=(1, 1), padding='valid'),
-            torch.nn.AvgPool2d(kernel_size=(3, 3)),
-            torch.nn.Flatten()
+        self.img_x = img_x
+        self.img_y = img_y
+        self.CNN_embed_dim = CNN_embed_dim
+
+        # CNN architechtures
+        self.ch1, self.ch2, self.ch3, self.ch4 = 32, 64, 128, 256
+        self.k1, self.k2, self.k3, self.k4 = (5, 5), (3, 3), (3, 3), (3, 3)  # 2d kernal size
+        self.s1, self.s2, self.s3, self.s4 = (2, 2), (2, 2), (2, 2), (2, 2)  # 2d strides
+        self.pd1, self.pd2, self.pd3, self.pd4 = (0, 0), (0, 0), (0, 0), (0, 0)  # 2d padding
+
+        # conv2D output shapes
+        self.conv1_outshape = conv2D_output_size((self.img_x, self.img_y), self.pd1, self.k1,
+                                                 self.s1)  # Conv1 output shape
+        self.conv2_outshape = conv2D_output_size(self.conv1_outshape, self.pd2, self.k2, self.s2)
+        self.conv3_outshape = conv2D_output_size(self.conv2_outshape, self.pd3, self.k3, self.s3)
+        self.conv4_outshape = conv2D_output_size(self.conv3_outshape, self.pd4, self.k4, self.s4)
+
+        # fully connected layer hidden nodes
+        self.fc_hidden1, self.fc_hidden2 = fc_hidden1, fc_hidden2
+        self.drop_p = drop_p
+
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_channels=3, out_channels=self.ch1, kernel_size=self.k1, stride=self.s1, padding=self.pd1),
+            nn.BatchNorm2d(self.ch1, momentum=0.01),
+            nn.ReLU(inplace=True),
+            # nn.MaxPool2d(kernel_size=2),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(in_channels=self.ch1, out_channels=self.ch2, kernel_size=self.k2, stride=self.s2,
+                      padding=self.pd2),
+            nn.BatchNorm2d(self.ch2, momentum=0.01),
+            nn.ReLU(inplace=True),
+            # nn.MaxPool2d(kernel_size=2),
         )
 
-    def forward(self, x):
-        x = self.encoder(x) # (1, 512)
-        return x
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(in_channels=self.ch2, out_channels=self.ch3, kernel_size=self.k3, stride=self.s3,
+                      padding=self.pd3),
+            nn.BatchNorm2d(self.ch3, momentum=0.01),
+            nn.ReLU(inplace=True),
+            # nn.MaxPool2d(kernel_size=2),
+        )
+
+        self.conv4 = nn.Sequential(
+            nn.Conv2d(in_channels=self.ch3, out_channels=self.ch4, kernel_size=self.k4, stride=self.s4,
+                      padding=self.pd4),
+            nn.BatchNorm2d(self.ch4, momentum=0.01),
+            nn.ReLU(inplace=True),
+            # nn.MaxPool2d(kernel_size=2),
+        )
+
+        self.drop = nn.Dropout2d(self.drop_p)
+        self.pool = nn.MaxPool2d(2)
+        self.fc1 = nn.Linear(self.ch4 * self.conv4_outshape[0] * self.conv4_outshape[1],
+                             self.fc_hidden1)  # fully connected layer, output k classes
+        self.fc2 = nn.Linear(self.fc_hidden1, self.fc_hidden2)
+        self.fc3 = nn.Linear(self.fc_hidden2, self.CNN_embed_dim)  # output = CNN embedding latent variables
+
+    def forward(self, x_3d):
+        cnn_embed_seq = []
+        for t in range(x_3d.size(1)):
+            # CNNs
+            x = self.conv1(x_3d[:, t, :, :, :])
+            x = self.conv2(x)
+            x = self.conv3(x)
+            x = self.conv4(x)
+            x = x.view(x.size(0), -1)  # flatten the output of conv
+
+            # FC layers
+            x = F.relu(self.fc1(x))
+            # x = F.dropout(x, p=self.drop_p, training=self.training)
+            x = F.relu(self.fc2(x))
+            x = F.dropout(x, p=self.drop_p, training=self.training)
+            x = self.fc3(x)
+            cnn_embed_seq.append(x)
+
+        # swap time and sample dim such that (sample dim, time dim, CNN latent dim)
+        cnn_embed_seq = torch.stack(cnn_embed_seq, dim=0).transpose_(0, 1)
+        # cnn_embed_seq: shape=(batch, time_step, input_size)
+
+        return cnn_embed_seq
 
 class LSTM(nn.Module):
-    def __init__(self, input_size = 1536, hidden_size = 1024, output_size = 1024):
+    def __init__(self, CNN_embed_dim=300, h_RNN_layers=3, h_RNN=256, h_FC_dim=128, drop_p=0.3, num_classes=50):
         super(LSTM, self).__init__()
-        self.hidden_size = hidden_size
-        self.i2h = nn.Linear(input_size, hidden_size)
-        self.i2o = nn.Linear(input_size, output_size)
-        # self.dropout = nn.Dropout(0.1)
-        self.softmax = nn.LogSoftmax(dim=1)
+        self.RNN_input_size = CNN_embed_dim
+        self.h_RNN_layers = h_RNN_layers  # RNN hidden layers
+        self.h_RNN = h_RNN  # RNN hidden nodes
+        self.h_FC_dim = h_FC_dim
+        self.drop_p = drop_p
+        self.num_classes = num_classes
 
-    def forward(self, x, hidden):
-        x_combined = torch.cat((x, hidden), 1)
-        hidden = self.i2h(x_combined)
-        x = self.i2o(x_combined)
-        x = self.softmax(x)
-        return x, hidden
+        self.LSTM = nn.LSTM(
+            input_size=self.RNN_input_size,
+            hidden_size=self.h_RNN,
+            num_layers=h_RNN_layers,
+            batch_first=True,  # input & output will has batch size as 1s dimension. e.g. (batch, time_step, input_size)
+        )
 
-    def initHidden(self):
-        return torch.zeros(1, self.hidden_size)
+        self.fc1 = nn.Linear(self.h_RNN, self.h_FC_dim)
+        self.fc2 = nn.Linear(self.h_FC_dim, self.num_classes)
+
+    def forward(self, x_RNN):
+        self.LSTM.flatten_parameters()
+        RNN_out, (h_n, h_c) = self.LSTM(x_RNN, None)
+        """ h_n shape (n_layers, batch, hidden_size), h_c shape (n_layers, batch, hidden_size) """
+        """ None represents zero initial hidden state. RNN_out has shape=(batch, time_step, output_size) """
+
+        # FC layers
+        x = self.fc1(RNN_out[:, -1, :])  # choose RNN_out at the last time step
+        x = F.relu(x)
+        x = F.dropout(x, p=self.drop_p, training=self.training)
+        x = self.fc2(x)
+
+        return x
+
+class Dataset_CRNN(data.Dataset):
+    "Characterizes a dataset for PyTorch"
+    def __init__(self, data_path, folders, labels, frames, transform=None):
+        "Initialization"
+        self.data_path = data_path
+        self.labels = labels
+        self.folders = folders
+        self.transform = transform
+        self.frames = frames
+
+    def __len__(self):
+        "Denotes the total number of samples"
+        return len(self.folders)
+
+    def read_images(self, path, selected_folder, use_transform):
+        x = []
+        for i in self.frames:
+            image = Image.open(os.path.join(path, selected_folder, 'frame{:d}.png'.format(i)))
+
+            if use_transform is not None:
+                image = use_transform(image)
+
+            x.append(image)
+        x = torch.stack(x, dim=0)
+
+        return x
+
+    def __getitem__(self, index):
+        "Generates one sample of data"
+        # Select sample
+        folder = self.folders[index]
+
+        # Load data
+        x = self.read_images(self.data_path, folder, self.transform)     # (input) spatial images
+        y = torch.LongTensor([self.labels[index]])                  # (labels) LongTensor are for int64 instead of FloatTensor
+
+        # print(x.shape)
+        return x, y
 
 def train(log_intreval, model, device, train_loader, optimizer, epoch):
     # Set model as training mode
@@ -159,10 +290,11 @@ use_cuda = torch.cuda.is_available()                 # check if GPU exists
 device = torch.device("cuda" if use_cuda else "cpu") # use CPU or GPU
 
 # Data loading parameters
-params = {'batch_size': 5, 'shuffle': True, 'num_workers': 4, 'pin_memory': True} if use_cuda else {}
+params = {'batch_size': 1, 'shuffle': True, 'pin_memory': True} if use_cuda else {}
 
 # load Task actions names
-task_labels = ['JumpForward', 'Run', 'TurnLeft', 'TurnRight']
+task_labels = ['JumpForward', 'JumpForward', 'Run', 'Run', 'TurnLeft', 'TurnLeft', 'TurnRight', 'TurnRight']
+# task_labels = ['JumpForward', 'Run', 'TurnLeft', 'TurnRight']
 
 # convert labels -> category
 le = LabelEncoder()
@@ -192,17 +324,85 @@ x_list = all_tasks_names              # all video file names
 y_list = le.transform(task_labels)    # all video labels
 
 # random split sample set to training set and test set
-x_train, y_train, x_test, y_test = train_test_split(x_list, y_list, test_size=0.25, random_state=42)
+train_list, test_list, train_label, test_label = train_test_split(x_list, y_list, test_size=0.25, random_state=42)
 
-transform = transforms.Compose([transforms.Resize(i)])
+transform = transforms.Compose([transforms.Resize([img_x, img_y]),
+                                transforms.ToTensor(),
+                                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
+selected_frames = np.arange(b_frame, e_frame, s_frame).tolist()
 
-cnn = CNN()
-lstm = LSTM()
+train_set, valid_set = Dataset_CRNN(data_path, train_list, train_label, selected_frames, transform=transform) ,\
+                       Dataset_CRNN(data_path, test_list, test_label, selected_frames, transform=transform)
 
+train_loader = data.DataLoader(train_set, **params)
+valid_loader = data.DataLoader(valid_set, **params)
+
+# create model
+cnn = CNN().to(device)
+lstm = LSTM().to(device)
+
+# Parallelize model to multiple GPUs
+if torch.cuda.device_count() > 1:
+    print("Using", torch.cuda.device_count(), "GPUs!")
+    cnn_encoder = nn.DataParallel(cnn)
+    rnn_decoder = nn.DataParallel(lstm)
+
+crnn_params = list(cnn.parameters()) + list(lstm.parameters())
+optimizer = torch.optim.Adam(crnn_params, lr=learning_rate)
+
+# record training process
+epoch_train_losses = []
+epoch_train_scores = []
+epoch_test_losses = []
+epoch_test_scores = []
+
+# start training
+for epoch in range(epochs):
+    # train, test model
+    train_losses, train_scores = train(log_interval, [cnn, lstm], device, train_loader, optimizer, epoch)
+    epoch_test_loss, epoch_test_score = validation([cnn, lstm], device, optimizer, valid_loader)
+
+    # save results
+    epoch_train_losses.append(train_losses)
+    epoch_train_scores.append(train_scores)
+    epoch_test_losses.append(epoch_test_loss)
+    epoch_test_scores.append(epoch_test_score)
+
+    # save all train test results
+    A, B, C, D = np.array(epoch_train_losses), np.array(epoch_train_scores), \
+                 np.array(epoch_test_losses), np.array(epoch_test_scores)
+    np.save('./outputs/CRNN_epoch_training_losses.npy', A)
+    np.save('./outputs/CRNN_epoch_training_scores.npy', B)
+    np.save('./outputs/CRNN_epoch_test_loss.npy', C)
+    np.save('./outputs/CRNN_epoch_test_score.npy', D)
+
+# plot
+fig = plt.figure(figsize=(10, 4))
+plt.subplot(121)
+plt.plot(np.arange(1, epochs + 1), A[:, -1])  # train loss (on epoch end)
+plt.plot(np.arange(1, epochs + 1), C)         #  test loss (on epoch end)
+plt.title("model loss")
+plt.xlabel('epochs')
+plt.ylabel('loss')
+plt.legend(['train', 'test'], loc="upper left")
+# 2nd figure
+plt.subplot(122)
+plt.plot(np.arange(1, epochs + 1), B[:, -1])  # train accuracy (on epoch end)
+plt.plot(np.arange(1, epochs + 1), D)         #  test accuracy (on epoch end)
+plt.title("training scores")
+plt.xlabel('epochs')
+plt.ylabel('accuracy')
+plt.legend(['train', 'test'], loc="upper left")
+title = "./fig_UCF101_CRNN.png"
+plt.savefig(title, dpi=600)
+# plt.close(fig)
+plt.show()
+
+"""
 h = torch.randn(1, 1024)
 
-for epoch in range(5):
+for epoch in range(120):
     pred = cnn(data[i])
     pred, h = lstm(pred, h)
     pred = torch.argmax(pred, dim=1)
@@ -210,3 +410,4 @@ for epoch in range(5):
     h.detach()
     # pred = torch.stack(pred, dim=0)
     print()
+"""
