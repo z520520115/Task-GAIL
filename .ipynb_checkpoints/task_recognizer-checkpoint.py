@@ -38,6 +38,9 @@ log_interval = 10       # interval for displaying training info
 # select which frame to begin & end in videos
 b_frame, e_frame, s_frame = 1, 29, 1
 
+# fake data for test
+# data = torch.ones(5, 1, 3, 500, 500) # [batchsize, seqsize, channle, 500, 500]
+
 def conv2D_output_size(img_size, padding, kernel_size, stride):
     # compute output shape of conv2D
     outshape = (np.floor((img_size[0] + 2 * padding[0] - (kernel_size[0] - 1) - 1) / stride[0] + 1).astype(int),
@@ -51,47 +54,57 @@ class CNN(nn.Module):
         self.img_y = img_y
         self.CNN_embed_dim = CNN_embed_dim
 
+        # CNN architechtures
+        self.ch1, self.ch2, self.ch3, self.ch4 = 32, 64, 128, 256
+        self.k1, self.k2, self.k3, self.k4 = (5, 5), (3, 3), (3, 3), (3, 3)  # 2d kernal size
+        self.s1, self.s2, self.s3, self.s4 = (2, 2), (2, 2), (2, 2), (2, 2)  # 2d strides
+        self.pd1, self.pd2, self.pd3, self.pd4 = (0, 0), (0, 0), (0, 0), (0, 0)  # 2d padding
+
         # conv2D output shapes
-        self.conv1_outshape = conv2D_output_size((self.img_x, self.img_y), (0, 0), (5, 5), (2, 2))  # Conv1 output shape
-        self.conv2_outshape = conv2D_output_size(self.conv1_outshape, (0, 0), (3, 3), (2, 2))
-        self.conv3_outshape = conv2D_output_size(self.conv2_outshape, (0, 0), (3, 3), (2, 2))
-        self.conv4_outshape = conv2D_output_size(self.conv3_outshape, (0, 0), (3, 3), (2, 2))
+        self.conv1_outshape = conv2D_output_size((self.img_x, self.img_y), self.pd1, self.k1,
+                                                 self.s1)  # Conv1 output shape
+        self.conv2_outshape = conv2D_output_size(self.conv1_outshape, self.pd2, self.k2, self.s2)
+        self.conv3_outshape = conv2D_output_size(self.conv2_outshape, self.pd3, self.k3, self.s3)
+        self.conv4_outshape = conv2D_output_size(self.conv3_outshape, self.pd4, self.k4, self.s4)
 
         # fully connected layer hidden nodes
         self.fc_hidden1, self.fc_hidden2 = fc_hidden1, fc_hidden2
         self.drop_p = drop_p
 
         self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=(5, 5), stride=(2, 2), padding=(0, 0)),
-            nn.BatchNorm2d(32, momentum=0.01),
+            nn.Conv2d(in_channels=3, out_channels=self.ch1, kernel_size=self.k1, stride=self.s1, padding=self.pd1),
+            nn.BatchNorm2d(self.ch1, momentum=0.01),
             nn.ReLU(inplace=True),
             # nn.MaxPool2d(kernel_size=2),
         )
         self.conv2 = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=(3, 3), stride=(2, 2), padding=(0, 0)),
-            nn.BatchNorm2d(64, momentum=0.01),
+            nn.Conv2d(in_channels=self.ch1, out_channels=self.ch2, kernel_size=self.k2, stride=self.s2,
+                      padding=self.pd2),
+            nn.BatchNorm2d(self.ch2, momentum=0.01),
             nn.ReLU(inplace=True),
             # nn.MaxPool2d(kernel_size=2),
         )
 
         self.conv3 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(0, 0)),
-            nn.BatchNorm2d(128, momentum=0.01),
+            nn.Conv2d(in_channels=self.ch2, out_channels=self.ch3, kernel_size=self.k3, stride=self.s3,
+                      padding=self.pd3),
+            nn.BatchNorm2d(self.ch3, momentum=0.01),
             nn.ReLU(inplace=True),
             # nn.MaxPool2d(kernel_size=2),
         )
 
         self.conv4 = nn.Sequential(
-            nn.Conv2d(128, 256, kernel_size=(3, 3), stride=(2, 2), padding=(0, 0)),
-            nn.BatchNorm2d(256, momentum=0.01),
+            nn.Conv2d(in_channels=self.ch3, out_channels=self.ch4, kernel_size=self.k4, stride=self.s4,
+                      padding=self.pd4),
+            nn.BatchNorm2d(self.ch4, momentum=0.01),
             nn.ReLU(inplace=True),
             # nn.MaxPool2d(kernel_size=2),
         )
 
         self.drop = nn.Dropout2d(self.drop_p)
         self.pool = nn.MaxPool2d(2)
-        # self.fc1 = nn.Linear(256 * self.conv4_outshape[0] * self.conv4_outshape[1], self.fc_hidden1)  # fully connected layer, output k classes
-        self.fc1 = nn.Linear(256 * 14 * 20, self.fc_hidden1)
+        self.fc1 = nn.Linear(self.ch4 * self.conv4_outshape[0] * self.conv4_outshape[1],
+                             self.fc_hidden1)  # fully connected layer, output k classes
         self.fc2 = nn.Linear(self.fc_hidden1, self.fc_hidden2)
         self.fc3 = nn.Linear(self.fc_hidden2, self.CNN_embed_dim)  # output = CNN embedding latent variables
 
@@ -104,11 +117,9 @@ class CNN(nn.Module):
             x = self.conv3(x)
             x = self.conv4(x)
             x = x.view(x.size(0), -1)  # flatten the output of conv
-            # x = x.view(-1, 4*6*256) # x.view 的第二个参数和nn.linear第一个参数一致
-            print(self.conv1_outshape, self.conv2_outshape, self.conv3_outshape, self.conv4_outshape)
 
             # FC layers
-            x = F.relu(self.fc1(x)) # 256 * 4 * 6
+            x = F.relu(self.fc1(x))
             # x = F.dropout(x, p=self.drop_p, training=self.training)
             x = F.relu(self.fc2(x))
             x = F.dropout(x, p=self.drop_p, training=self.training)
@@ -313,7 +324,7 @@ x_list = all_tasks_names              # all video file names
 y_list = le.transform(task_labels)    # all video labels
 
 # random split sample set to training set and test set
-train_list, test_list, train_label, test_label = train_test_split(x_list, y_list, test_size=0.25, random_state=42, stratify= y_list)
+train_list, test_list, train_label, test_label = train_test_split(x_list, y_list, test_size=0.25, random_state=42)
 
 transform = transforms.Compose([transforms.Resize([img_x, img_y]),
                                 transforms.ToTensor(),
