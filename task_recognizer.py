@@ -19,7 +19,7 @@ save_model_path = "./crnn_model/"
 
 # cnn architecture
 CNN_fc_hidden1, CNN_fc_hidden2 = 1024, 768
-cnn_embed_dim = 512
+CNN_embed_dim = 512
 img_x, img_y = 256, 342
 dropout_p = 0.0
 
@@ -31,7 +31,7 @@ RNN_FC_dim = 256
 # training parameters
 k = 4                   # number of target category
 epochs = 120
-batch_size = 1
+batch_size = 2
 learning_rate = 1e-4
 log_interval = 10       # interval for displaying training info
 
@@ -105,7 +105,7 @@ class CNN(nn.Module):
             x = self.conv4(x)
             x = x.view(x.size(0), -1)  # flatten the output of conv
             # x = x.view(-1, 4*6*256) # x.view 的第二个参数和nn.linear第一个参数一致
-            print(self.conv1_outshape, self.conv2_outshape, self.conv3_outshape, self.conv4_outshape)
+            # print(self.conv1_outshape, self.conv2_outshape, self.conv3_outshape, self.conv4_outshape)
 
             # FC layers
             x = F.relu(self.fc1(x)) # 256 * 4 * 6
@@ -194,7 +194,7 @@ class Dataset_CRNN(data.Dataset):
         # print(x.shape)
         return x, y
 
-def train(log_intreval, model, device, train_loader, optimizer, epoch):
+def train_func(log_intreval, model, device, train_loader, optimizer, epoch):
     # Set model as training mode
     cnn_encoder, rnn_decoder = model
     cnn_encoder.train() # cnn
@@ -259,7 +259,7 @@ def validation(model, device, optimizer, test_loader):
     test_loss /= len(test_loader.dataset)
 
     # compute accuracy
-    all_y = torch.stack(all_y, dim=0)# 拼接张量, 将all_y变成0维的新张量
+    all_y = torch.stack(all_y, dim=0) # 拼接张量, 将all_y变成0维的新张量
     all_y_pred = torch.stack(all_y_pred, dim = 0)
     test_score = accuracy_score(all_y.cpu().data.squeeze().numpy(), all_y_pred.cpu().data.squeeze().numpy())
 
@@ -268,8 +268,8 @@ def validation(model, device, optimizer, test_loader):
 
     # save Pytorch model of best record
     torch.save(cnn_encoder.state_dict(), os.path.join(save_model_path, 'cnn_epoch{}.pth'.format(epoch + 1)))
-    torch.save(rnn_decoder.state_dict(), os.path.join(save_model_path, 'lstm_epoch{.pth'.format(epoch + 1)))
-    torch.save(optimizer.state.dict(), os.path.join(save_model_path, 'optimizer_eopch{}.pth'.format(epoch + 1)))
+    torch.save(rnn_decoder.state_dict(), os.path.join(save_model_path, 'lstm_epoch{}.pth'.format(epoch + 1)))
+    torch.save(optimizer.state_dict(), os.path.join(save_model_path, 'optimizer_eopch{}.pth'.format(epoch + 1)))
     print("Epoch {} model saved!".format(epoch + 1))
 
     return test_loss, test_score
@@ -277,13 +277,13 @@ def validation(model, device, optimizer, test_loader):
 # Detect devices
 use_cuda = torch.cuda.is_available()                 # check if GPU exists
 device = torch.device("cuda" if use_cuda else "cpu") # use CPU or GPU
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Data loading parameters
-params = {'batch_size': 1, 'shuffle': True, 'pin_memory': True} if use_cuda else {}
+params = {'batch_size': 2, 'shuffle': True, 'pin_memory': True} if use_cuda else {}
 
 # load Task actions names
-task_labels = ['JumpForward', 'JumpForward', 'Run', 'Run', 'TurnLeft', 'TurnLeft', 'TurnRight', 'TurnRight']
-# task_labels = ['JumpForward', 'Run', 'TurnLeft', 'TurnRight']
+task_labels = ['JumpForward', 'Run', 'TurnLeft', 'TurnRight']
 
 # convert labels -> category
 le = LabelEncoder()
@@ -310,10 +310,11 @@ for f in fnames:
 
 # all data files
 x_list = all_tasks_names              # all video file names
-y_list = le.transform(task_labels)    # all video labels
+y_list = le.transform(tasks)          # all video labels
+
 
 # random split sample set to training set and test set
-train_list, test_list, train_label, test_label = train_test_split(x_list, y_list, test_size=0.25, random_state=42, stratify= y_list)
+train_list, test_list, train_label, test_label = train_test_split(x_list, y_list, test_size=0.25, random_state=42, stratify=y_list)
 
 transform = transforms.Compose([transforms.Resize([img_x, img_y]),
                                 transforms.ToTensor(),
@@ -328,8 +329,10 @@ train_loader = data.DataLoader(train_set, **params)
 valid_loader = data.DataLoader(valid_set, **params)
 
 # create model
-cnn = CNN().to(device)
-lstm = LSTM().to(device)
+cnn = CNN(img_x=img_x, img_y=img_y, fc_hidden1=CNN_fc_hidden1, fc_hidden2=CNN_fc_hidden2,
+          drop_p=dropout_p, CNN_embed_dim=CNN_embed_dim).to(device)
+lstm = LSTM(CNN_embed_dim=CNN_embed_dim, h_RNN_layers=RNN_hidden_layers, h_RNN=RNN_hidden_nodes,
+            h_FC_dim=RNN_FC_dim, drop_p=dropout_p, num_classes=k).to(device)
 
 # Parallelize model to multiple GPUs
 if torch.cuda.device_count() > 1:
@@ -349,7 +352,7 @@ epoch_test_scores = []
 # start training
 for epoch in range(epochs):
     # train, test model
-    train_losses, train_scores = train(log_interval, [cnn, lstm], device, train_loader, optimizer, epoch)
+    train_losses, train_scores = train_func(log_interval, [cnn, lstm], device, train_loader, optimizer, epoch)
     epoch_test_loss, epoch_test_score = validation([cnn, lstm], device, optimizer, valid_loader)
 
     # save results
@@ -383,20 +386,8 @@ plt.title("training scores")
 plt.xlabel('epochs')
 plt.ylabel('accuracy')
 plt.legend(['train', 'test'], loc="upper left")
-title = "./fig_UCF101_CRNN.png"
+title = "./task_recognizer_CRNN.png"
 plt.savefig(title, dpi=600)
 # plt.close(fig)
 plt.show()
 
-"""
-h = torch.randn(1, 1024)
-
-for epoch in range(120):
-    pred = cnn(data[i])
-    pred, h = lstm(pred, h)
-    pred = torch.argmax(pred, dim=1)
-    pred = pred.detach().numpy()
-    h.detach()
-    # pred = torch.stack(pred, dim=0)
-    print()
-"""
