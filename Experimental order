@@ -1,6 +1,0 @@
-1.task_recognizer model build
-2.make some samples(4 * 200)
-3.train task_recognizer, if have 4 task acc > 25% at least
-4.task_recognizer connect with Task_GAIL
-5.make the expert datas
-6....
