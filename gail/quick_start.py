@@ -2,7 +2,7 @@ from dm_control import suite
 from dm_control.suite.wrappers import pixels
 from moviepy.editor import ImageSequenceClip
 import numpy as np
-
+import matplotlib.pyplot as plt
 
 def arg_parser():
   """
@@ -25,7 +25,6 @@ def dm_control_parser():
   return parser
 
 def main(args):
-
     # Load one task:
     env = suite.load(domain_name=args.domain_name, task_name=args.task_name)
 
@@ -38,15 +37,13 @@ def main(args):
     observation_matrix = []
 
     while not time_step.last():
-        action = np.random.uniform(action_spec.minimum,
-                                   action_spec.maximum,
-                                   size=action_spec.shape)
+        action = np.random.uniform(action_spec.minimum, action_spec.maximum, size=action_spec.shape)
         time_step = env.step(action)
         observation_dm = time_step.observation["pixels"]
         observation_matrix.append(observation_dm)
-
-    clip = ImageSequenceClip(observation_matrix, fps=50)
-    clip.write_gif('./test.gif')
+    #
+    # clip = ImageSequenceClip(observation_matrix, fps=50)
+    # clip.write_gif('./test.gif')
 
 
 if __name__ == '__main__':
