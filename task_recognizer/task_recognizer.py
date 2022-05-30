@@ -196,6 +196,7 @@ class Dataset_CRNN(data.Dataset):
         # print(x.shape)
         return x, y
 
+
 def train_func(log_intreval, model, device, train_loader, optimizer, epoch):
     # Set model as training mode
     cnn_encoder, rnn_decoder = model
